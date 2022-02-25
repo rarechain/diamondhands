@@ -5,6 +5,7 @@ var jsonFile = "qao.json";
 const abi = JSON.parse(fs.readFileSync(jsonFile));
 const Moralis = require("moralis/node");
 const { Contract, Provider } = require("ethers-multicall");
+require("dotenv").config();
 
 module.exports = async function (fastify, opts) {
   fastify.register(require("fastify-axios"));
@@ -12,8 +13,8 @@ module.exports = async function (fastify, opts) {
     "https://speedy-nodes-nyc.moralis.io/057bf05e3dad4457750854a1/eth/mainnet"
   );
 
-  const serverUrl = "https://v3dpafkhipdj.usemoralis.com:2053/server";
-  const appId = "sSWtD2chMBZrcZjFSHNFKNVhgOCxjUt884X80Aai";
+  const serverUrl = process.env.MORALIS_SERVER_URL;
+  const appId = process.env.MORALIS_APP_ID;
   Moralis.start({ serverUrl, appId });
   const QAOTransfer = Moralis.Object.extend("QAOTransferA");
   const query = new Moralis.Query(QAOTransfer);
