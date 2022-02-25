@@ -1,45 +1,177 @@
-"use strict";
-
 const QAO_ADDRESS = "0x3402e15b3ea0f1aec2679c4be4c6d051cef93953";
 const { ethers } = require("ethers");
 var fs = require("fs");
 var jsonFile = "qao.json";
 const abi = JSON.parse(fs.readFileSync(jsonFile));
+const Moralis = require("moralis/node");
+const { Contract, Provider } = require("ethers-multicall");
 
 module.exports = async function (fastify, opts) {
   fastify.register(require("fastify-axios"));
   const provider = new ethers.providers.JsonRpcProvider(
-    "https://mainnet.infura.io/v3/3d8cb3c5014a4f6cbb8b18264a5aad1f"
+    "https://speedy-nodes-nyc.moralis.io/057bf05e3dad4457750854a1/eth/mainnet"
   );
 
-  const filter = {
-    address: QAO_ADDRESS,
-    fromBlock: "earliest",
-    toBlock: "latest",
-    topics: [ethers.utils.id("Transfer(address,address,uint256)")],
-  };
+  const serverUrl = "https://v3dpafkhipdj.usemoralis.com:2053/server";
+  const appId = "sSWtD2chMBZrcZjFSHNFKNVhgOCxjUt884X80Aai";
+  Moralis.start({ serverUrl, appId });
+  const QAOTransfer = Moralis.Object.extend("QAOTransferA");
+  const query = new Moralis.Query(QAOTransfer);
+  query.ascending("block_number");
+  query.limit(10000);
 
-  const contract = new ethers.Contract(QAO_ADDRESS, abi, provider);
-  const iface = new ethers.utils.Interface(abi);
-  fastify.get("/", async (request, reply) => {
-    let res = await provider.getLogs(filter);
-    res = await Promise.all(
-      res.map(async (item) => {
-        let _item = item;
-        try {
-          _item.data = iface.parseLog({
-            data: item.data,
-            topics: item.topics,
-          });
-          // _item.timestamp = (
-          //   await provider.getBlock(item.blockNumber)
-          // ).timestamp;
-        } catch (e) {
-          console.log(e);
-        }
-        return _item;
+  const ethcallProvider = new Provider(provider);
+  await ethcallProvider.init();
+  const contract = new Contract(QAO_ADDRESS, abi);
+
+  fastify.get("/out-ratios", async (request, reply) => {
+    let transferTxns = await query.find();
+    const filteredTransferTxns = transferTxns
+      .filter((txn) => {
+        return (
+          txn.toJSON().from !== "0x0000000000000000000000000000000000000000" &&
+          txn.toJSON().to !== "0x0000000000000000000000000000000000000000" &&
+          txn.toJSON().from !== "0x000000000000000000000000000000000000dead" &&
+          txn.toJSON().to !== "0x000000000000000000000000000000000000dead" &&
+          txn.toJSON().from !== "0x053b759c880b69075a52e4374efa08e6b5196ad0" &&
+          txn.toJSON().to !== "0x053b759c880b69075a52e4374efa08e6b5196ad0"
+        );
       })
+      .map((txn) => txn.toJSON());
+
+    const outTransfers = {};
+    filteredTransferTxns.map((txn) => {
+      if (typeof outTransfers[txn.from] === "undefined")
+        outTransfers[txn.from] = ethers.BigNumber.from(0);
+
+      outTransfers[txn.from] = outTransfers[txn.from].add(
+        ethers.BigNumber.from(txn.value)
+      );
+    });
+
+    const outRatios = {};
+
+    const contractCalls = Object.keys(outTransfers).map((key) =>
+      contract.balanceOf(key)
     );
-    return res;
+    const balances = await ethcallProvider.all(contractCalls);
+    Object.keys(outTransfers).map(async (key, idx) => {
+      if (!balances[idx].isZero())
+        outRatios[key] = outTransfers[key].div(balances[idx]).toString();
+    });
+
+    return {
+      "out vs balance ratio": Object.fromEntries(
+        Object.entries(outRatios).sort(([, a], [, b]) => a - b)
+      ),
+    };
+  });
+
+  fastify.get("/in-ratios", async (request, reply) => {
+    let transferTxns = await query.find();
+    const filteredTransferTxns = transferTxns
+      .filter((txn) => {
+        return (
+          txn.toJSON().from !== "0x0000000000000000000000000000000000000000" &&
+          txn.toJSON().to !== "0x0000000000000000000000000000000000000000" &&
+          txn.toJSON().from !== "0x000000000000000000000000000000000000dead" &&
+          txn.toJSON().to !== "0x000000000000000000000000000000000000dead" &&
+          txn.toJSON().from !== "0x053b759c880b69075a52e4374efa08e6b5196ad0" &&
+          txn.toJSON().to !== "0x053b759c880b69075a52e4374efa08e6b5196ad0"
+        );
+      })
+      .map((txn) => txn.toJSON());
+
+    const inTransfers = {};
+
+    filteredTransferTxns.map((txn) => {
+      if (typeof inTransfers[txn.to] === "undefined")
+        inTransfers[txn.to] = ethers.BigNumber.from(0);
+
+      inTransfers[txn.to] = inTransfers[txn.to].add(
+        ethers.BigNumber.from(txn.value)
+      );
+    });
+
+    const inRatios = {};
+
+    const contractCalls = Object.keys(inTransfers).map((key) =>
+      contract.balanceOf(key)
+    );
+    const balances = await ethcallProvider.all(contractCalls);
+
+    Object.keys(inTransfers).map(async (key, idx) => {
+      if (!balances[idx].isZero())
+        inRatios[key] = inTransfers[key].div(balances[idx]).toString();
+    });
+
+    return {
+      "in vs balance ratio": Object.fromEntries(
+        Object.entries(inRatios).sort(([, a], [, b]) => a - b)
+      ),
+    };
+  });
+
+  fastify.get("/holding-days", async (request, reply) => {
+    let transferTxns = await query.find();
+    const filteredTransferTxns = transferTxns
+      .filter((txn) => {
+        return (
+          txn.toJSON().from !== "0x0000000000000000000000000000000000000000" &&
+          txn.toJSON().to !== "0x0000000000000000000000000000000000000000" &&
+          txn.toJSON().from !== "0x000000000000000000000000000000000000dead" &&
+          txn.toJSON().to !== "0x000000000000000000000000000000000000dead" &&
+          txn.toJSON().from !== "0x053b759c880b69075a52e4374efa08e6b5196ad0" &&
+          txn.toJSON().to !== "0x053b759c880b69075a52e4374efa08e6b5196ad0"
+        );
+      })
+      .map((txn) => txn.toJSON());
+
+    const holdingData = {};
+    filteredTransferTxns.map((txn) => {
+      if (typeof holdingData[txn.from] === "undefined") {
+        holdingData[txn.from] = {
+          balance: ethers.BigNumber.from(0),
+          date: "",
+          logs: [],
+        };
+      }
+      if (typeof holdingData[txn.to] === "undefined") {
+        holdingData[txn.to] = {
+          balance: ethers.BigNumber.from(0),
+          date: "",
+          logs: [],
+        };
+      }
+      if (holdingData[txn.from].date && !holdingData[txn.from].balance.isZero())
+        holdingData[txn.from].logs.push({
+          amount: holdingData[txn.from].balance.toString(),
+          days:
+            (new Date(Date.parse(txn.block_timestamp.iso)) -
+              new Date(Date.parse(holdingData[txn.from].date))) /
+            (1000 * 60 * 60 * 24),
+        });
+
+      if (holdingData[txn.to].date && !holdingData[txn.to].balance.isZero())
+        holdingData[txn.to].logs.push({
+          amount: holdingData[txn.to].balance.toString(),
+          days:
+            (new Date(Date.parse(txn.block_timestamp.iso)) -
+              new Date(Date.parse(holdingData[txn.to].date))) /
+            (1000 * 60 * 60 * 24),
+        });
+
+      holdingData[txn.from].balance = holdingData[txn.from].balance.sub(
+        ethers.BigNumber.from(txn.value)
+      );
+      holdingData[txn.to].balance = holdingData[txn.to].balance.add(
+        ethers.BigNumber.from(txn.value)
+      );
+
+      holdingData[txn.from].date = txn.block_timestamp.iso;
+      holdingData[txn.to].date = txn.block_timestamp.iso;
+    });
+
+    return holdingData;
   });
 };
