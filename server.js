@@ -175,4 +175,74 @@ module.exports = async function (fastify, opts) {
 
     return holdingData;
   });
+
+  fastify.get("/in-out-ratios", async (request, reply) => {
+    let transferTxns = await query.find();
+    const filteredTransferTxns = transferTxns
+      .filter((txn) => {
+        return (
+          txn.toJSON().from !== "0x0000000000000000000000000000000000000000" &&
+          txn.toJSON().to !== "0x0000000000000000000000000000000000000000" &&
+          txn.toJSON().from !== "0x000000000000000000000000000000000000dead" &&
+          txn.toJSON().to !== "0x000000000000000000000000000000000000dead" &&
+          txn.toJSON().from !== "0x053b759c880b69075a52e4374efa08e6b5196ad0" && // stake pool
+          txn.toJSON().to !== "0x053b759c880b69075a52e4374efa08e6b5196ad0" &&
+          txn.toJSON().from !== "0x364c90218f6664f6c8b154ad9c3e31947cd3640c" && // Uniswap pool
+          txn.toJSON().to !== "0x364c90218f6664f6c8b154ad9c3e31947cd3640c" &&
+          txn.toJSON().from !== "0xA0c68C638235ee32657e8f720a23ceC1bFc77C77" && // Bridge
+          txn.toJSON().to !== "0xA0c68C638235ee32657e8f720a23ceC1bFc77C77"
+        );
+      })
+      .map((txn) => txn.toJSON());
+
+    const transfers = {};
+
+    filteredTransferTxns.map((txn) => {
+      if (typeof transfers[txn.from] === "undefined") {
+        transfers[txn.from] = {
+          in: ethers.BigNumber.from(0),
+          out: ethers.BigNumber.from(0),
+        };
+      }
+
+      if (typeof transfers[txn.to] === "undefined") {
+        transfers[txn.to] = {
+          in: ethers.BigNumber.from(0),
+          out: ethers.BigNumber.from(0),
+        };
+      }
+
+      transfers[txn.from].out = transfers[txn.from].out.add(
+        ethers.BigNumber.from(txn.value)
+      );
+      transfers[txn.to].in = transfers[txn.to].in.add(
+        ethers.BigNumber.from(txn.value)
+      );
+    });
+
+    const inOutRatios = {};
+
+    const contractCalls = Object.keys(transfers).map((key) =>
+      contract.balanceOf(key)
+    );
+    const balances = await ethcallProvider.all(contractCalls);
+
+    Object.keys(transfers).map(async (key, idx) => {
+      if (!balances[idx].isZero()) {
+        if (transfers[key].out.isZero()) {
+          inOutRatios[key] = "99999999";
+        } else {
+          inOutRatios[key] = transfers[key].in
+            .div(transfers[key].out)
+            .toString();
+        }
+      }
+    });
+
+    return {
+      "in vs out ratio": Object.fromEntries(
+        Object.entries(inOutRatios).sort(([, a], [, b]) => a - b)
+      ),
+    };
+  });
 };
