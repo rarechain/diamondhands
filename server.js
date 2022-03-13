@@ -202,6 +202,7 @@ module.exports = async function (fastify, opts) {
         transfers[txn.from] = {
           in: ethers.BigNumber.from(0),
           out: ethers.BigNumber.from(0),
+          senders: new Set(),
         };
       }
 
@@ -209,6 +210,7 @@ module.exports = async function (fastify, opts) {
         transfers[txn.to] = {
           in: ethers.BigNumber.from(0),
           out: ethers.BigNumber.from(0),
+          senders: new Set(),
         };
       }
 
@@ -218,6 +220,7 @@ module.exports = async function (fastify, opts) {
       transfers[txn.to].in = transfers[txn.to].in.add(
         ethers.BigNumber.from(txn.value)
       );
+      transfers[txn.to].senders.add(txn.from);
     });
 
     const inOutRatios = {};
@@ -228,20 +231,30 @@ module.exports = async function (fastify, opts) {
     const balances = await ethcallProvider.all(contractCalls);
 
     Object.keys(transfers).map(async (key, idx) => {
+      if (typeof inOutRatios[key] === "undefined") {
+        inOutRatios[key] = {
+          value: "0",
+          senders: [],
+        };
+      }
       if (!balances[idx].isZero()) {
         if (transfers[key].out.isZero()) {
-          inOutRatios[key] = "99999999";
+          inOutRatios[key].value = "99999999";
+          inOutRatios[key].senders = Array.from(transfers[key].senders);
+          console.log(inOutRatios[key].senders);
         } else {
-          inOutRatios[key] = transfers[key].in
-            .div(transfers[key].out)
-            .toString();
+          const tmp = ethers.FixedNumber.from(transfers[key].in).divUnsafe(
+            ethers.FixedNumber.from(transfers[key].out)
+          );
+
+          inOutRatios[key].value = tmp.toString();
         }
       }
     });
 
     return {
       "in vs out ratio": Object.fromEntries(
-        Object.entries(inOutRatios).sort(([, a], [, b]) => a - b)
+        Object.entries(inOutRatios).sort(([, a], [, b]) => a.value - b.value)
       ),
     };
   });
