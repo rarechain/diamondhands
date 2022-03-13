@@ -241,7 +241,6 @@ module.exports = async function (fastify, opts) {
         if (transfers[key].out.isZero()) {
           inOutRatios[key].value = "99999999";
           inOutRatios[key].senders = Array.from(transfers[key].senders);
-          console.log(inOutRatios[key].senders);
         } else {
           const tmp = ethers.FixedNumber.from(transfers[key].in).divUnsafe(
             ethers.FixedNumber.from(transfers[key].out)
